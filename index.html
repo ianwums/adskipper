@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ad‑Skipping Podcast Player</title>
+  <style>
+    :root { --bg:#0b0d10; --fg:#e8edf2; --muted:#9aa6b2; --brand:#7cc4ff; --accent:#7ef0c1; --warn:#ffd166; --danger:#ff6b6b; }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Arial}
+    .wrap{max-width:960px;margin:24px auto;padding:0 16px}
+    header{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:16px}
+    h1{font-size:20px;margin:0}
+    .card{background:#11161d;border:1px solid #1b2430;border-radius:16px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .grow{flex:1}
+    label.btn, button.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:12px;border:1px solid #263241;background:#0f141a;color:var(--fg);cursor:pointer}
+    button.btn.primary{background:linear-gradient(135deg,var(--brand),var(--accent));color:#0a0e14;border:none}
+    button.btn.ghost{background:transparent;border-color:#2a3442}
+    button.btn:disabled{opacity:.6;cursor:not-allowed}
+    input[type=file]{display:none}
+    .meta{color:var(--muted);font-size:14px}
+    .bar{height:10px;background:#151b22;border-radius:999px;position:relative;overflow:hidden}
+    .bar .progress{position:absolute;height:100%;background:linear-gradient(90deg,var(--brand),var(--accent));width:0%}
+    .bar .marker{position:absolute;top:0;height:100%;background:repeating-linear-gradient(45deg, #ff7b7b 0 8px, #ffb3b3 8px 16px);opacity:.85}
+    .badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .badge{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid #2a3442;color:var(--muted)}
+    .badge.live{border-color:var(--warn);color:var(--warn)}
+    .list{margin:8px 0 0;padding:0;list-style:none}
+    .list li{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px dashed #223}
+    .list li:last-child{border-bottom:none}
+    .ad{color:#ffb3b3}
+    .ok{color:var(--accent)}
+    .pill{padding:2px 8px;border-radius:999px;border:1px solid #2a3442;color:#c9d7e5;font-size:12px}
+    .switch{display:inline-flex;align-items:center;gap:8px}
+    .switch input{appearance:none;width:40px;height:22px;background:#2a3442;border-radius:22px;position:relative;outline:none;cursor:pointer}
+    .switch input:checked{background:linear-gradient(90deg,var(--brand),var(--accent))}
+    .switch input::after{content:"";position:absolute;width:18px;height:18px;background:#0b0d10;border-radius:999px;top:2px;left:2px;transition:left .2s}
+    .switch input:checked::after{left:20px}
+    footer{margin:32px 0 16px;color:var(--muted);font-size:13px}
+    .hint{font-size:13px;color:#aab6c2}
+    .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+    @media (max-width:900px){.grid{grid-template-columns:1fr}}
+    .log{height:180px;background:#0c1117;border:1px solid #1b2430;border-radius:12px;padding:8px;overflow:auto;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;color:#c8d1dc}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Ad‑Skipping Podcast Player</h1>
+      <div class="badges">
+        <span class="badge">Client‑side only</span>
+        <span class="badge">Works with MP3/MP4/AAC</span>
+        <span class="badge live" id="modeBadge">Skip: On</span>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="row" style="margin-bottom:8px">
+        <label class="btn" for="fileInput">➕ Load audio…</label>
+        <input id="fileInput" type="file" accept="audio/*" />
+
+        <label class="btn" for="markersInput">🏷️ Load markers (.json/.vtt)…</label>
+        <input id="markersInput" type="file" accept=".json,.vtt,.txt" />
+
+        <button class="btn ghost" id="detectBtn" title="Lightweight on‑device heuristic">🔎 Detect ad sections (beta)</button>
+        <button class="btn ghost" id="exportBtn" title="Export current markers as JSON">💾 Export markers</button>
+        <div class="grow"></div>
+        <label class="switch">
+          <input id="toggleSkip" type="checkbox" checked />
+          <span>Auto‑skip ads</span>
+        </label>
+      </div>
+
+      <audio id="player" controls preload="metadata" style="width:100%"></audio>
+
+      <div style="margin:12px 0">
+        <div class="bar" id="timeline">
+          <div class="progress" id="progress"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div class="meta" id="meta">No file loaded</div>
+          <div class="grow"></div>
+          <div class="pill" id="now">0:00</div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <h3 style="margin:8px 0 4px">Detected ad sections</h3>
+          <ul class="list" id="segments"></ul>
+          <div class="hint">Markers can be loaded from a JSON ([{start,end,label} in seconds]) or WebVTT (cues with kind "ad"). Click a marker to jump.</div>
+        </div>
+        <div>
+          <h3 style="margin:8px 0 4px">Event log</h3>
+          <div class="log" id="log"></div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <div>Heuristic notes: we compute short‑time energy & spectral centroid over 0.5s windows to spot jingles/music beds; we also segment by silence and look for repetitive break‑lengths typical of ad pods. Provide a transcript JSON with key phrases to improve accuracy.</div>
+    </footer>
+  </div>
+
+  <script>
+    // --- Utilities ---
+    const $ = (id) => document.getElementById(id);
+    const fmt = (t) => {
+      if (!isFinite(t)) return '0:00';
+      const s = Math.max(0, Math.floor(t));
+      const m = Math.floor(s/60); const r = s%60;
+      return `${m}:${r.toString().padStart(2,'0')}`;
+    };
+
+    const log = (msg) => {
+      const el = $('log');
+      el.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+      el.scrollTop = el.scrollHeight;
+    };
+
+    // --- State ---
+    const state = {
+      duration: 0,
+      markers: [], // {start, end, label}
+      skipEnabled: true,
+      lastJumpedTo: -1,
+    };
+
+    // --- Elements ---
+    const audio = $('player');
+    const fileInput = $('fileInput');
+    const markersInput = $('markersInput');
+    const progress = $('progress');
+    const timeline = $('timeline');
+    const segments = $('segments');
+    const meta = $('meta');
+    const now = $('now');
+    const detectBtn = $('detectBtn');
+    const exportBtn = $('exportBtn');
+    const toggleSkip = $('toggleSkip');
+    const modeBadge = $('modeBadge');
+
+    toggleSkip.addEventListener('change', () => {
+      state.skipEnabled = toggleSkip.checked;
+      modeBadge.textContent = `Skip: ${state.skipEnabled ? 'On' : 'Off'}`;
+      modeBadge.classList.toggle('live', state.skipEnabled);
+      log(`Auto-skip ${state.skipEnabled ? 'enabled' : 'disabled'}`);
+    });
+
+    // --- Loaders ---
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      audio.src = url;
+      audio.playbackRate = 1.0;
+      audio.addEventListener('loadedmetadata', () => {
+        state.duration = audio.duration;
+        meta.textContent = `${file.name} • ${fmt(audio.duration)}`;
+        drawMarkers();
+      }, { once: true });
+      log(`Loaded audio: ${file.name}`);
+    });
+
+    markersInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const text = await file.text();
+      try {
+        if (file.name.endsWith('.json')) {
+          const data = JSON.parse(text);
+          // Expect [{start,end,label}]
+          state.markers = data.filter(m => isFinite(m.start) && isFinite(m.end) && m.end>m.start)
+                              .map(m => ({start:+m.start,end:+m.end,label:m.label||'ad'}))
+                              .sort((a,b)=>a.start-b.start);
+          log(`Loaded ${state.markers.length} markers from JSON`);
+        } else { // try VTT
+          state.markers = parseVTT(text);
+          log(`Loaded ${state.markers.length} markers from VTT`);
+        }
+        renderSegments();
+        drawMarkers();
+      } catch(err){
+        log('Failed to parse markers: '+ err.message);
+      }
+    });
+
+    function parseVTT(text){
+      // Very small VTT parser: looks for cues with note 'ad' or text containing [ad]
+      const lines = text.split(/\r?\n/);
+      const out = [];
+      for (let i=0;i<lines.length;i++){
+        const l = lines[i].trim();
+        const m = l.match(/(\d+):(\d+):(\d+\.\d+)\s+-->\s+(\d+):(\d+):(\d+\.\d+)/) || l.match(/(\d+):(\d+\.\d+)\s+-->\s+(\d+):(\d+\.\d+)/);
+        if (m){
+          const toSec = (h,mn,s) => (h?(+h):0)*3600 + (+mn)*60 + (+s);
+          let start, end; let label='ad';
+          if (m.length===7){ start = toSec(m[1],m[2],m[3]); end = toSec(m[4],m[5],m[6]); }
+          else { start = (+m[1])*60 + (+m[2]); end = (+m[3])*60 + (+m[4]); }
+          // look ahead for cue text
+          let textBuf = '';
+          let j=i+1;
+          while (j<lines.length && lines[j].trim()!=='' ){ textBuf += lines[j++]+'\n'; }
+          if (/\bad\b|sponsor|brought to you/i.test(textBuf)) label='ad'; else label='marker';
+          out.push({start,end,label});
+        }
+      }
+      return out;
+    }
+
+    // --- Rendering ---
+    function renderSegments(){
+      segments.innerHTML = '';
+      if (!state.markers.length){
+        const li = document.createElement('li');
+        li.innerHTML = '<span class="meta">No markers</span>';
+        segments.appendChild(li);
+        return;
+      }
+      state.markers.forEach((m,idx)=>{
+        const li = document.createElement('li');
+        const left = document.createElement('div');
+        left.innerHTML = `<strong class="ad">${m.label||'ad'}</strong> ${fmt(m.start)}–${fmt(m.end)}`;
+        const right = document.createElement('div');
+        const jump = document.createElement('button');
+        jump.className='btn'; jump.textContent='Jump';
+        jump.addEventListener('click',()=>{ audio.currentTime = m.start + 0.05; audio.play(); });
+        const del = document.createElement('button');
+        del.className='btn ghost'; del.textContent='Delete';
+        del.addEventListener('click',()=>{ state.markers.splice(idx,1); renderSegments(); drawMarkers(); });
+        right.append(jump, del);
+        li.append(left,right); segments.appendChild(li);
+      });
+    }
+
+    function drawMarkers(){
+      const dur = audio.duration || state.duration || 0;
+      timeline.querySelectorAll('.marker').forEach(n=>n.remove());
+      if (!dur || !state.markers.length) return;
+      state.markers.forEach(m=>{
+        const el = document.createElement('div');
+        el.className = 'marker';
+        el.style.left = `${(m.start/dur)*100}%`;
+        el.style.width = `${((m.end-m.start)/dur)*100}%`;
+        el.title = `${m.label||'ad'} ${fmt(m.start)}–${fmt(m.end)}`;
+        timeline.appendChild(el);
+      });
+    }
+
+    // --- Playback integration ---
+    audio.addEventListener('timeupdate', () => {
+      now.textContent = fmt(audio.currentTime);
+      const dur = audio.duration || 0;
+      if (dur) progress.style.width = `${(audio.currentTime/dur)*100}%`;
+
+      if (!state.skipEnabled || !state.markers.length) return;
+      const t = audio.currentTime;
+      const hit = state.markers.find(m => t >= m.start && t < m.end);
+      if (hit){
+        if (state.lastJumpedTo !== hit.end){
+          log(`Skipping ad ${fmt(hit.start)}–${fmt(hit.end)}`);
+          state.lastJumpedTo = hit.end;
+        }
+        audio.currentTime = hit.end + 0.05; // hop out of ad
+      }
+    });
+
+    audio.addEventListener('loadedmetadata', drawMarkers);
+
+    // --- Heuristic detector (beta) ---
+    detectBtn.addEventListener('click', async () => {
+      if (!audio.src){ log('Load an audio file first.'); return; }
+      try{
+        const arrayBuf = await fetch(audio.src).then(r=>r.arrayBuffer());
+        const off = new OfflineAudioContext(1, 44100*60, 44100); // temp length; will resample
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const decoded = await audioCtx.decodeAudioData(arrayBuf.slice(0));
+        const ch = decoded.getChannelData(0);
+        // Analysis params
+        const sr = decoded.sampleRate;
+        const win = Math.floor(0.5*sr); // 0.5s window
+        const hop = Math.floor(0.25*sr);
+        const energy = [];
+        const centroid = [];
+        const eps = 1e-9;
+        for (let i=0;i+win<=ch.length;i+=hop){
+          let sum=0; for (let j=0;j<win;j++){ const v = ch[i+j]; sum += v*v; }
+          energy.push(Math.sqrt(sum/win));
+          // crude centroid proxy using zero crossing rate as cheaper measure
+          let zc=0; for (let j=1;j<win;j++){ const a=ch[i+j-1], b=ch[i+j]; if ((a>=0 && b<0) || (a<0 && b>=0)) zc++; }
+          centroid.push(zc/win);
+        }
+        // Baseline from first 3 minutes
+        const frames3m = Math.max(1, Math.floor((3*60)/0.25));
+        const baseE = median(energy.slice(0, frames3m));
+        const baseZ = median(centroid.slice(0, frames3m));
+        // Flag windows that are louder than baseline and with higher ZCR (music/jingle-ish), or very quiet (silence bumpers)
+        const flags = energy.map((e,idx)=>{
+          const z = centroid[idx];
+          const isMusic = (e > baseE*1.6 && z > baseZ*1.3);
+          const isSilence = e < baseE*0.35;
+          return {idx, isMusic, isSilence};
+        });
+        // Convert flagged windows into candidate ranges
+        const ranges = coalesce(flags, hop/sr, win/sr);
+        // Heuristic: look for patterns of [silence -> music -> sustained music >= 10s]
+        const ads = [];
+        for (let r of ranges){
+          const len = r.end - r.start;
+          if (r.type==='music' && len>=10){
+            // extend backwards to preceding silence (bumper)
+            const prev = ranges.find(p=>p.type==='silence' && p.end<=r.start && (r.start-p.end)<3);
+            const start = prev ? prev.start : r.start;
+            // extend forwards to following silence if close
+            const next = ranges.find(p=>p.type==='silence' && p.start>=r.end && (p.start-r.end)<3);
+            const end = next ? next.end : r.end;
+            ads.push({start, end, label:'ad (auto)'});
+          }
+        }
+        // Merge overlaps & remove duplicates
+        const merged = mergeRanges(ads);
+        // Apply simple min/max bounds typical of ad pods (10–120s)
+        const filtered = merged.filter(r => (r.end - r.start) >= 10 && (r.end - r.start) <= 150);
+        state.markers = reconcileWithExisting(state.markers, filtered);
+        renderSegments();
+        drawMarkers();
+        log(`Detector: proposed ${filtered.length} ad section(s).`);
+      } catch(err){
+        console.error(err);
+        log('Detection failed: '+ err.message);
+      }
+    });
+
+    // --- Export markers ---
+    exportBtn.addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(state.markers, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'ad_markers.json'; a.click();
+      URL.revokeObjectURL(url);
+      log('Exported markers to ad_markers.json');
+    });
+
+    // --- Helper fns ---
+    function median(arr){
+      const a = arr.slice().sort((x,y)=>x-y); const n=a.length; if (!n) return 0; const m=Math.floor(n/2); return n%2?a[m]:(a[m-1]+a[m])/2;
+    }
+
+    function coalesce(flags, hopSec, winSec){
+      // Build contiguous blocks of music and silence
+      const out=[]; let cur=null;
+      for (let i=0;i<flags.length;i++){
+        const f = flags[i];
+        const tStart = i*hopSec; const tEnd = tStart + winSec;
+        const type = f.isMusic ? 'music' : (f.isSilence ? 'silence' : 'other');
+        if (!cur){ cur={type, start:tStart, end:tEnd}; continue; }
+        if (type===cur.type){ cur.end = tEnd; }
+        else { out.push(cur); cur={type, start:tStart, end:tEnd}; }
+      }
+      if (cur) out.push(cur);
+      return out.filter(r=>r.type!=='other');
+    }
+
+    function mergeRanges(ranges){
+      if (!ranges.length) return [];
+      ranges.sort((a,b)=>a.start-b.start);
+      const out=[ranges[0]];
+      for (let i=1;i<ranges.length;i++){
+        const prev = out[out.length-1]; const cur = ranges[i];
+        if (cur.start <= prev.end + 1){ // allow 1s gap
+          prev.end = Math.max(prev.end, cur.end);
+        } else out.push({...cur});
+      }
+      return out;
+    }
+
+    function reconcileWithExisting(existing, proposed){
+      if (!existing.length) return proposed;
+      // Keep manual markers; add non-overlapping proposed ones
+      const out = existing.slice();
+      for (let p of proposed){
+        const overlap = existing.some(e => !(p.end <= e.start || p.start >= e.end));
+        if (!overlap) out.push(p);
+      }
+      return out.sort((a,b)=>a.start-b.start);
+    }
+  </script>
+</body>
+</html>
